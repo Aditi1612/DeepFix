@@ -60,7 +60,6 @@ class DrRepairDatasetForCode2Code(Dataset):
         ret = []
         # max_length = 0
         # c_max_length = 0
-        ct = 0
         for key in tqdm(list(data.keys())):
             source = data[key]["source"]
             input_hf = self.tokenizer(source, padding=True, return_tensors='pt')
@@ -80,9 +79,6 @@ class DrRepairDatasetForCode2Code(Dataset):
                         "attention_mask": target_hf.attention_mask
                     },
                 })
-            ct += 1
-            if ct > 5:
-                break
         # print("source max length: {}".format(max_length))
         # print("corrupt_source max length: {}".format(c_max_length))
         return ret
