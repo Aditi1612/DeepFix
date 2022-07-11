@@ -31,7 +31,7 @@ def remove_line_numbers(source_dict):
     return ' '.join(ret)
 
 def generate_training_data(bins, validation_users):
-    data_path = "../data_processing/DrRepair_deepfix/"
+    data_path = "./data_processing/DrRepair_deepfix/"
     result = {'train': {}, 'validation': {}}
 
     exceptions_in_mutate_call = 0
@@ -79,10 +79,10 @@ def generate_training_data(bins, validation_users):
     return result
 
 if __name__ == '__main__':
-    validation_users = np.load(os.path.join('../data', 'deepfix_raw_data', 'validation_users.npy'), allow_pickle=True).item()
-    bins = np.load(os.path.join('../data', 'deepfix_raw_data', 'bins.npy'), allow_pickle=True)
+    validation_users = np.load(os.path.join('./data', 'deepfix_raw_data', 'validation_users.npy'), allow_pickle=True).item()
+    bins = np.load(os.path.join('./data', 'deepfix_raw_data', 'bins.npy'), allow_pickle=True)
 
-    output_dir = os.path.join('../data', 'DrRepair_deepfix')
+    output_dir = os.path.join('./data', 'DrRepair_deepfix')
     make_dir_if_not_exists(os.path.join(output_dir))
 
     result = generate_training_data(bins, validation_users)

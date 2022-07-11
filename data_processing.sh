@@ -27,4 +27,4 @@ rm -rf bin0 bin1 bin2 bin3 bin4
 cd ../..
 
 echo 'DrRepair Data generation...'
-python data_processing/DrRepair_deepfix/data_generator.py
+python data_processing/data_generator.py
