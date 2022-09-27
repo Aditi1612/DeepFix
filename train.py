@@ -48,7 +48,7 @@ import torch.utils.data.distributed
 import torch.nn.parallel
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from transformers import AutoTokenizer, T5ForConditionalGeneration
+from transformers import AutoTokenizer, T5ForConditionalGeneration, RobertaTokenizer
 
 # data utilis script
 from utils.data_utils import DrRepairDatasetForCode2Code
@@ -68,24 +68,39 @@ def f1_str_base(target, prediction):
     
     return f1
 
-def f1_score_dict(targets, predictions):
+def f1_score_dict(targets, predictions, inputs=None):
     return {"f1_score": 
              {'score': 100 * np.average(
-                 np.array([f1_str_base(x, y) for x, y in zip(targets, predictions)], dtype=np.float)),
+                 np.array([f1_str_base(x, y) for x, y in zip(targets, predictions)], dtype=np.float64)),
                  'count': len(targets)}}
 
-def accuracy_dict(targets, predictions):
+# seq acc
+def accuracy_dict(targets, predictions, inputs=None):
     return {"accuracy":
              {'score': 100*sklearn.metrics.accuracy_score(
                  targets, predictions),
+                 'count': len(targets)}}
+
+# 1 - afterERR / beforeERR   (afterERR : edit-distance of prediction-target, beforeERR : edit-distance of inputs-target)
+def fix_ratio_dict(targets, predictions, inputs):
+    scores = [1 - levenshteinDistance(prediction, target) / levenshteinDistance(input_, target) for target, prediction, input_ in zip(targets, predictions, inputs)]
+    scores = [max(x, 0) for x in scores]
+    return {"fix_ratio":
+             {'score': 100 * sum(scores) / len(scores) ,
                  'count': len(targets)}}
 
 TASKS = {
     "drrepair_code2code": {
         "model": T5ForConditionalGeneration,
         "dataset": DrRepairDatasetForCode2Code,
-        "metric": [accuracy_dict, f1_score_dict],
-        "metric_key": ["accuracy", "f1_score"]
+        "metric": [accuracy_dict, f1_score_dict, fix_ratio_dict],
+        "metric_key": ["accuracy", "f1_score", "fix_ratio"]
+    },
+    "drrepair_code2align": {
+        "model": T5ForConditionalGeneration,
+        "dataset": DrRepairDatasetForCode2Align,
+        "metric": [accuracy_dict, f1_score_dict, fix_ratio_dict],
+        "metric_key": ["accuracy", "f1_score", "fix_ratio"]
     }
 }
 
@@ -252,10 +267,17 @@ def main():
         args.batch_size / args.gradient_accumulation_steps)
 
     # get tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.pre_trained_model)
+    # tokenizer = AutoTokenizer.from_pretrained(args.pre_trained_model)
+    tokenizer = RobertaTokenizer.from_pretrained(args.pre_trained_model)
 
     # get model
     model = TASKS[args.task]["model"].from_pretrained(args.pre_trained_model)
+
+    # add special token
+    if TASKS[args.task] == 'drrepair_code2align':
+        special_tokens_dict = {"additional_special_tokens": ['[unchange]', '[insert]', '[delete]']}
+        tokenizer.add_special_tokens(special_tokens_dict)
+        model.resize_token_embeddings(len(tokenizer))
 
     model = model.to(device)
 
@@ -268,8 +290,10 @@ def main():
     )
 
     # load dataset
-    train_ds = TASKS[args.task]["dataset"](tokenizer, split="train")
-    valid_ds = TASKS[args.task]["dataset"](tokenizer, split="val")
+    # train_ds = TASKS[args.task]["dataset"](tokenizer, split="train")
+    # valid_ds = TASKS[args.task]["dataset"](tokenizer, split="val")
+    train_ds = TASKS[args.task]["dataset"](tokenizer, split="train", data_len=1000)
+    valid_ds = TASKS[args.task]["dataset"](tokenizer, split="val", data_len=10)
     print("train_ds: {}".format(len(train_ds)))
     print("valid_ds: {}".format(len(valid_ds)))
 
@@ -450,6 +474,7 @@ def train(train_loader, model, tokenizer, optimizer, scheduler, epoch, device, a
 
         # backward pass  
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
         if (step_inbatch + 1) % args.gradient_accumulation_steps == 0:
             optimizer.step()
@@ -459,7 +484,8 @@ def train(train_loader, model, tokenizer, optimizer, scheduler, epoch, device, a
             if scheduler is not None:
                 scheduler.step()
 
-        losses.update(loss)
+        with torch.no_grad():   
+            losses.update(loss)
 
         global_step = epoch*steps_per_epoch + step_inbatch
         if global_step % args.print_freq == (args.print_freq - 1):
@@ -537,12 +563,14 @@ def validate(test_loader, model, tokenizer, epoch, device, args):
             output_seq = model_ptr.generate(
                 input_ids=batch_in['input']['input_ids'].cuda(),
                 pad_token_id=pad_token_id,
+                max_length=512,
                 num_beams=args.num_beams,
                 early_stopping=True
             )
 
             # decode best sequence
-            targets = [tokenizer.decode(tseq, skip_special_tokens=True) for tseq in batch_in['input']["input_ids"]]
+            inputs = [tokenizer.decode(tseq, skip_special_tokens=True) for tseq in batch_in['input']["input_ids"]]
+            targets = [tokenizer.decode(tseq, skip_special_tokens=True) for tseq in batch_in['target']["input_ids"]]
             predictions = [tokenizer.decode(tseq, skip_special_tokens=True) for tseq in output_seq]
 
             # try:
@@ -557,7 +585,7 @@ def validate(test_loader, model, tokenizer, epoch, device, args):
             #     print("targets: {}\n predictions: {}\n".format(targets, predictions))
 
             for metric in TASKS[args.task]["metric"]:
-                score_dict = metric(targets, predictions)
+                score_dict = metric(targets, predictions, inputs)
                 for k, v in score_dict.items():
                     metric_meter[k].update(torch.tensor(v["score"], device=device), v["count"])
 
@@ -638,3 +666,4 @@ if __name__ == "__main__":
 # Resume & Huggingface model save
 # CUDA_LAUNCH_BLOCKING=1 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 OMP_NUM_THREADS=1 python -m torch.distributed.run --nproc_per_node=8 train.py --resume [true or best] --hf_path default
 # CUDA_LAUNCH_BLOCKING=1 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 OMP_NUM_THREADS=1 python -m torch.distributed.run --nproc_per_node=8 train.py --resume true --hf_path default
+# CUDA_LAUNCH_BLOCKING=1 CUDA_VISIBLE_DEVICES=0,1,2 OMP_NUM_THREADS=1 python -m torch.distributed.run --nproc_per_node=3 train.py --resume true --hf_path default

@@ -44,6 +44,21 @@ def remove_line_numbers(source):
     source = source.replace("  ", " ")
     return source.split()
 
+def levenshteinDistance(s1, s2):
+    if len(s1) > len(s2):
+        s1, s2 = s2, s1
+
+    distances = range(len(s1) + 1)
+    for i2, c2 in enumerate(s2):
+        distances_ = [i2+1]
+        for i1, c1 in enumerate(s1):
+            if c1 == c2:
+                distances_.append(distances[i1])
+            else:
+                distances_.append(1 + min((distances[i1], distances[i1 + 1], distances_[-1])))
+        distances = distances_
+    return distances[-1]
+
 def getEditDistance(a, b):
     dist = np.zeros((len(a) + 1, len(b) + 1),dtype=np.int64)
     dist[:, 0] = list(range(len(a) + 1))
@@ -78,6 +93,22 @@ def getTrace(a, b, dist):
                 log.append(["i", i, b[j-1]])
                 j -= 1
     return log
+
+# def apply_edits(source, edits, inverse_vocab):
+#     fixed = []
+#     inserted = 0
+#     insert_tok = [str(i) for i in range(1,110)]
+#     for i, edit in enumerate(edits):
+#         if edit == '0':
+#             fixed.append(source[i - inserted])
+#         elif edit != '-1':
+#             fixed.append(inverse_vocab[edit])                        
+#             if edits[i] in insert_tok:
+#                 inserted += 1
+
+#     return fixed
+
+# for code2align 미완
 
 def apply_edits(source, edits, inverse_vocab):
     fixed = []
